@@ -21,11 +21,12 @@ export const env = {
   jwtExpiresIn: process.env.JWT_EXPIRES_IN ?? "8h",
   cookieName: process.env.COOKIE_NAME ?? "reviews_admin_token",
 
-  whatsapp: {
-    apiToken: process.env.WHATSAPP_API_TOKEN ?? "",
-    phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID ?? "",
-    apiVersion: process.env.WHATSAPP_API_VERSION ?? "v20.0",
-  },
+ whatsapp: {
+  apiToken: process.env.WHATSAPP_API_TOKEN ?? "",
+  phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID ?? "",
+  apiVersion: process.env.WHATSAPP_API_VERSION ?? "v22.0",
+  webhookVerifyToken: process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN ?? "",
+},
 
   reviewRateLimit: {
     windowHours: parseInt(process.env.REVIEW_RATE_LIMIT_WINDOW_HOURS ?? "6", 10),

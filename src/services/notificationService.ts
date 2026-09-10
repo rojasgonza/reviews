@@ -2,7 +2,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "../config/db";
 import { env } from "../config/env";
 import { notificationLogger } from "../utils/logger";
-import { sendWhatsappMessage, buildAlertMessage } from "./whatsappService";
+import { sendWhatsappMessage } from "./whatsappService";
 
 /**
  * Lógica central de alertas (requisito punto 27 del spec).
@@ -35,11 +35,17 @@ export async function checkAndSendAlerts(locationId: string) {
   }
 }
 
-async function evaluateAndSend(settingsId: string, locationId: string, locationName: string) {
+async function evaluateAndSend(
+  settingsId: string,
+  locationId: string,
+  locationName: string,
+) {
   await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     // Lock lógico: releemos dentro de la transacción para evitar carreras
     // si dos reseñas llegan casi al mismo tiempo.
-    const settings = await tx.notificationSettings.findUnique({ where: { id: settingsId } });
+    const settings = await tx.notificationSettings.findUnique({
+      where: { id: settingsId },
+    });
     if (!settings || !settings.enabled || !settings.recipientPhone) return;
 
     const totalReviews = await tx.review.count({ where: { locationId } });
@@ -47,7 +53,7 @@ async function evaluateAndSend(settingsId: string, locationId: string, locationN
 
     if (pending < settings.threshold) return;
 
-    // Reseñas consideradas en este envío: desde lastAlertReviewCount hasta ahora.
+    // Métricas para el template
     const statsWindow = await tx.review.aggregate({
       where: { locationId },
       _avg: { rating: true },
@@ -65,15 +71,7 @@ async function evaluateAndSend(settingsId: string, locationId: string, locationN
       where: { locationId, email: { not: null } },
     });
 
-    const message = buildAlertMessage({
-      locationName,
-      newReviews: pending,
-      average: statsWindow._avg.rating ?? 0,
-      lowRatingCount,
-      whatsappCount,
-      emailCount,
-      panelUrl: `${env.frontendUrl}/admin/reviews`,
-    });
+    const panelUrl = `${env.frontendUrl}/admin/reviews`;
 
     // Reservamos el conteo ANTES de intentar enviar para que, incluso si el
     // proceso se cae durante el envío, no se recalculen alertas duplicadas
@@ -84,7 +82,17 @@ async function evaluateAndSend(settingsId: string, locationId: string, locationN
       data: { lastAlertReviewCount: totalReviews, lastAlertAt: new Date() },
     });
 
-    const result = await sendWhatsappMessage(settings.recipientPhone!, message);
+    // Enviamos el template aprobado (no texto libre) porque las alertas son
+    // business-initiated y caen fuera de la ventana de 24h de WhatsApp.
+    const result = await sendWhatsappMessage(settings.recipientPhone, {
+      locationName,
+      newReviews: pending,
+      average: statsWindow._avg.rating ?? 0,
+      lowRatingCount,
+      whatsappCount,
+      emailCount,
+      panelUrl,
+    });
 
     await tx.notificationLog.create({
       data: {
@@ -101,6 +109,7 @@ async function evaluateAndSend(settingsId: string, locationId: string, locationN
       notificationLogger.error("Alerta de WhatsApp falló, reseña no se pierde", {
         locationId,
         error: result.error,
+        providerCode: result.providerCode,
       });
     }
   });
@@ -109,6 +118,13 @@ async function evaluateAndSend(settingsId: string, locationId: string, locationN
 /**
  * Reintenta los envíos que fallaron recientemente. Pensado para ser
  * invocado por el cron job periódico (jobs/alertCron.ts).
+ *
+ * ⚠️ NOTA: los stats (average, lowRatingCount, whatsappCount, emailCount)
+ * se mandan en 0 porque el log no los persiste. Si querés que los reintentos
+ * reflejen los mismos números que el envío original, agregá esos campos al
+ * modelo `NotificationLog` (average, lowRatingCount, whatsappCount, emailCount)
+ * y guardalos en `evaluateAndSend`. Mientras tanto, el template se renderiza
+ * con ceros en esas posiciones.
  */
 export async function retryFailedNotifications() {
   const failed = await prisma.notificationLog.findMany({
@@ -119,25 +135,27 @@ export async function retryFailedNotifications() {
 
   for (const log of failed) {
     if (!log.locationId) continue;
+
     const settings = await prisma.notificationSettings.findFirst({
       where: { OR: [{ locationId: log.locationId }, { locationId: null }] },
     });
     if (!settings?.recipientPhone || !settings.enabled) continue;
 
-    const location = await prisma.location.findUnique({ where: { id: log.locationId } });
+    const location = await prisma.location.findUnique({
+      where: { id: log.locationId },
+    });
     if (!location) continue;
 
-    const message = buildAlertMessage({
+    const result = await sendWhatsappMessage(settings.recipientPhone, {
       locationName: location.name,
       newReviews: log.reviewCount,
+      // TODO: persistir estos valores en NotificationLog para reintentos fieles
       average: 0,
       lowRatingCount: 0,
       whatsappCount: 0,
       emailCount: 0,
       panelUrl: `${env.frontendUrl}/admin/reviews`,
     });
-
-    const result = await sendWhatsappMessage(settings.recipientPhone, message);
 
     await prisma.notificationLog.update({
       where: { id: log.id },
