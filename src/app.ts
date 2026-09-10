@@ -10,6 +10,7 @@ import reviewRoutes from "./routes/reviewRoutes";
 import dashboardRoutes from "./routes/dashboardRoutes";
 import notificationRoutes from "./routes/notificationRoutes";
 import userRoutes from "./routes/userRoutes";
+import webhooksRouter from "./routes/webhooks";
 
 export const app = express();
 
@@ -21,6 +22,7 @@ app.use(
 );
 app.use(express.json({ limit: "1mb" }));
 app.use(cookieParser());
+app.use(webhooksRouter);
 
 app.get("/api/health", (_req, res) => res.json({ status: "ok" }));
 
