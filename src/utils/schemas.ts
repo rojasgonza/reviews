@@ -38,6 +38,18 @@ export const loginSchema = z.object({
   password: z.string().min(1),
 });
 
+export const createUserSchema = z.object({
+  email: z.string().trim().email(),
+  password: z.string().min(8, "La contraseña debe tener al menos 8 caracteres"),
+  role: z.enum(["admin", "editor"]).default("admin"),
+});
+
+export const updateUserSchema = z.object({
+  email: z.string().trim().email().optional(),
+  password: z.string().min(8, "La contraseña debe tener al menos 8 caracteres").optional(),
+  role: z.enum(["admin", "editor"]).optional(),
+});
+
 export const notificationSettingsSchema = z.object({
   locationId: z.string().uuid().nullable().optional(),
   enabled: z.boolean(),

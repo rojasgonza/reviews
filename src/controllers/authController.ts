@@ -5,8 +5,8 @@ import { env } from "../config/env";
 
 const cookieOptions = {
   httpOnly: true,
-  secure: env.nodeEnv === "production",
-  sameSite: "lax" as const,
+  secure: true, // obligatorio para SameSite=None; el sitio ya usa HTTPS
+  sameSite: "none" as const, // frontend y backend están en subdominios distintos (cross-site)
   maxAge: 8 * 60 * 60 * 1000,
   path: "/",
 };
@@ -23,7 +23,7 @@ export async function loginController(req: Request, res: Response, next: NextFun
 }
 
 export async function logoutController(req: Request, res: Response) {
-  res.clearCookie(env.cookieName, { path: "/" });
+  res.clearCookie(env.cookieName, { path: "/", secure: true, sameSite: "none" });
   res.json({ ok: true });
 }
 

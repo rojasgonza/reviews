@@ -21,6 +21,22 @@ declare global {
  * (preferido, mitiga XSS) o desde el header Authorization como fallback
  * para clientes no-browser (ej. Postman, scripts).
  */
+/**
+ * Restringe una ruta a uno o más roles. Debe usarse siempre después de
+ * requireAuth (necesita req.user ya seteado).
+ */
+export function requireRole(...roles: string[]) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    if (!req.user) {
+      return res.status(401).json({ error: "No autenticado" });
+    }
+    if (!roles.includes(req.user.role)) {
+      return res.status(403).json({ error: "No tenés permisos para realizar esta acción" });
+    }
+    next();
+  };
+}
+
 export function requireAuth(req: Request, res: Response, next: NextFunction) {
   const tokenFromCookie = req.cookies?.[env.cookieName];
   const authHeader = req.headers.authorization;
