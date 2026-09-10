@@ -1,0 +1,105 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum ReviewStatus {
+  pending
+  responded
+  archived
+}
+
+enum NotificationType {
+  whatsapp_alert
+}
+
+enum NotificationLogStatus {
+  sent
+  failed
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  role         String   @default("admin")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@map("users")
+}
+
+model Location {
+  id        String   @id @default(uuid())
+  slug      String   @unique
+  name      String
+  address   String?
+  phone     String?
+  logoUrl   String?  @map("logo_url")
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  reviews              Review[]
+  notificationSettings NotificationSettings?
+  notificationLogs     NotificationLog[]
+
+  @@map("locations")
+}
+
+model Review {
+  id              String       @id @default(uuid())
+  locationId      String       @map("location_id")
+  location        Location     @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  rating          Int
+  comment         String
+  customerName    String?      @map("customer_name")
+  whatsapp        String?
+  email           String?
+  contactConsent  Boolean      @default(false) @map("contact_consent")
+  status          ReviewStatus @default(pending)
+  adminResponse   String?      @map("admin_response")
+  respondedAt     DateTime?    @map("responded_at")
+  ipAddress       String?      @map("ip_address")
+  createdAt       DateTime     @default(now()) @map("created_at")
+  updatedAt       DateTime     @updatedAt @map("updated_at")
+
+  @@index([locationId])
+  @@index([createdAt])
+  @@index([status])
+  @@index([rating])
+  @@map("reviews")
+}
+
+model NotificationSettings {
+  id                    String    @id @default(uuid())
+  locationId            String?   @unique @map("location_id")
+  location              Location? @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  enabled               Boolean   @default(false)
+  threshold             Int       @default(10)
+  recipientPhone        String?   @map("recipient_phone")
+  lastAlertAt           DateTime? @map("last_alert_at")
+  lastAlertReviewCount  Int       @default(0) @map("last_alert_review_count")
+
+  @@map("notification_settings")
+}
+
+model NotificationLog {
+  id          String                 @id @default(uuid())
+  locationId  String?                @map("location_id")
+  location    Location?              @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  type        NotificationType       @default(whatsapp_alert)
+  reviewCount Int                    @map("review_count")
+  status      NotificationLogStatus
+  errorMessage String?               @map("error_message")
+  apiResponse Json?                  @map("api_response")
+  createdAt   DateTime               @default(now()) @map("created_at")
+
+  @@index([locationId])
+  @@index([createdAt])
+  @@map("notification_logs")
+}
