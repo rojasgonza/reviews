@@ -6,7 +6,7 @@ import { env } from "../config/env";
 const cookieOptions = {
   httpOnly: true,
   secure: true, // obligatorio para SameSite=None; el sitio ya usa HTTPS
-  sameSite: "none" as const, // frontend y backend están en subdominios distintos (cross-site)
+  sameSite: "lax" as const, // frontend y backend están en subdominios distintos (cross-site)
   maxAge: 8 * 60 * 60 * 1000,
   path: "/",
 };
