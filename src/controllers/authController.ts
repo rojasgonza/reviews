@@ -23,7 +23,7 @@ export async function loginController(req: Request, res: Response, next: NextFun
 }
 
 export async function logoutController(req: Request, res: Response) {
-  res.clearCookie(env.cookieName, { path: "/", secure: true, sameSite: "none" });
+  res.clearCookie(env.cookieName, { path: "/", secure: true, sameSite: "lax" });
   res.json({ ok: true });
 }
 
