@@ -21,11 +21,15 @@ export const env = {
   jwtExpiresIn: process.env.JWT_EXPIRES_IN ?? "8h",
   cookieName: process.env.COOKIE_NAME ?? "reviews_admin_token",
 
- whatsapp: {
-  apiToken: process.env.WHATSAPP_API_TOKEN ?? "",
-  phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID ?? "",
-  apiVersion: process.env.WHATSAPP_API_VERSION ?? "v22.0",
-  webhookVerifyToken: process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN ?? "",
+ // Evolution API (self-hosted, usa WhatsApp Web/Baileys por debajo).
+ // baseUrl: URL de tu servidor Evolution, ej: "https://evo.tudominio.com" (sin barra final)
+ // apiKey: la global apikey configurada en tu instancia de Evolution (header "apikey")
+ // instance: el nombre de la instancia que creaste y ya escaneaste con el QR
+ evolutionApi: {
+  baseUrl: (process.env.EVOLUTION_API_URL ?? "").replace(/\/+$/, ""),
+  apiKey: process.env.EVOLUTION_API_KEY ?? "",
+  instance: process.env.EVOLUTION_INSTANCE ?? "",
+  webhookToken: process.env.EVOLUTION_WEBHOOK_TOKEN ?? "",
 },
 
   reviewRateLimit: {

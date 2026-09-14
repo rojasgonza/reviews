@@ -5,9 +5,9 @@ import { notificationLogger } from "../utils/logger";
 
 export interface WhatsappSendResult {
   ok: boolean;
-  /** ID del mensaje en Meta (wamid.xxx) si el envío fue exitoso. */
+  /** ID del mensaje devuelto por Evolution (key.id) si el envío fue exitoso. */
   messageId?: string;
-  /** Código de error de Meta, si vino (ej: 131047 = re-engagement). */
+  /** Código de error HTTP de Evolution, si vino. */
   providerCode?: number;
   error?: string;
   response?: unknown;
@@ -25,29 +25,12 @@ export interface AlertTemplateParams {
 
 /* -------------------------------- Constants ------------------------------- */
 
-/**
- * Nombre del template aprobado en Meta WhatsApp Manager.
- * Debe coincidir exactamente con el que creaste en:
- * WhatsApp Manager → Message Templates → Create Template.
- *
- * El template debe tener 7 variables en el body, en este orden:
- *   {{1}} locationName
- *   {{2}} newReviews
- *   {{3}} average
- *   {{4}} lowRatingCount
- *   {{5}} whatsappCount
- *   {{6}} emailCount
- *   {{7}} panelUrl
- */
-const ALERT_TEMPLATE_NAME = "resumen_resenas";
-const ALERT_TEMPLATE_LANG = "es_AR";
-
 const SEND_TIMEOUT_MS = 10_000;
 
 /* ------------------------------- Normalización ---------------------------- */
 
 /**
- * Normaliza un teléfono al formato que exige Meta WhatsApp Cloud API.
+ * Normaliza un teléfono al formato que espera Evolution API (E.164 sin "+").
  *
  * Reglas:
  * - Argentina (+54): los móviles requieren `9` después del `54`.
@@ -87,46 +70,63 @@ export function normalizeWhatsappPhone(raw: string | null | undefined): string |
 
 /* ------------------------------- Helpers ---------------------------------- */
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
+/**
+ * Arma el texto del mensaje de alerta.
+ *
+ * A diferencia de Meta Cloud API, Evolution API (WhatsApp Web/Baileys) no
+ * exige un template pre-aprobado ni respeta la ventana de 24h de mensajes
+ * "business-initiated": manda texto libre desde el número conectado.
+ * Si más adelante querés cambiar la redacción, es el único lugar a tocar.
+ */
+function buildAlertMessage(params: AlertTemplateParams): string {
+  return (
+    `*${params.locationName}* — nuevas reseñas\n\n` +
+    `📝 Reseñas nuevas: ${params.newReviews}\n` +
+    `⭐ Promedio: ${params.average.toFixed(1)}\n` +
+    `⚠️ Con calificación baja (≤2): ${params.lowRatingCount}\n` +
+    `📱 Con WhatsApp: ${params.whatsappCount}\n` +
+    `✉️ Con email: ${params.emailCount}\n\n` +
+    `Ver panel: ${params.panelUrl}`
+  );
 }
 
 function extractMessageId(data: unknown): string | undefined {
-  const id = (data as { messages?: Array<{ id?: string }> })?.messages?.[0]?.id;
+  const id = (data as { key?: { id?: string } })?.key?.id;
   return typeof id === "string" ? id : undefined;
 }
 
-function extractProviderCode(data: unknown): number | undefined {
-  const code = (data as { error?: { code?: number } })?.error?.code;
-  return typeof code === "number" ? code : undefined;
+function extractErrorMessage(data: unknown): string | undefined {
+  const d = data as {
+    message?: string | string[];
+    error?: string;
+    response?: { message?: string | string[] };
+  };
+  const msg = d?.response?.message ?? d?.message ?? d?.error;
+  if (Array.isArray(msg)) return msg.join(", ");
+  return typeof msg === "string" ? msg : undefined;
 }
 
 /* ------------------------------ sendWhatsapp ------------------------------ */
 
 /**
  * Capa de abstracción sobre el proveedor de WhatsApp.
- * Hoy implementa Meta WhatsApp Business Cloud API, pero el resto del
- * sistema solo conoce esta interfaz (sendWhatsappMessage), por lo que
- * cambiar de proveedor en el futuro no requiere tocar notificationService.
+ * Ahora implementa Evolution API (self-hosted, WhatsApp Web/Baileys), pero
+ * el resto del sistema solo conoce esta interfaz (sendWhatsappMessage), por
+ * lo que cambiar de proveedor en el futuro no requiere tocar
+ * notificationService.ts ni nada que dependa de él.
  *
- * IMPORTANTE: enviamos un **template aprobado**, no texto libre, porque
- * las alertas son business-initiated (fuera de la ventana de 24h).
- * Enviar `type: "text"` a un usuario que no nos escribió en las últimas
- * 24h devuelve error 131047 "Re-engagement message".
- *
- * Credenciales: WHATSAPP_API_TOKEN y WHATSAPP_PHONE_NUMBER_ID se
- * configuran por variables de entorno (.env), nunca hardcodeadas.
- * Ver docs/DEPLOYMENT.md para cómo obtenerlas desde Meta for Developers.
+ * Credenciales: EVOLUTION_API_URL, EVOLUTION_API_KEY y EVOLUTION_INSTANCE
+ * se configuran por variables de entorno (.env), nunca hardcodeadas.
  */
 export async function sendWhatsappMessage(
   toPhone: string,
   params: AlertTemplateParams,
 ): Promise<WhatsappSendResult> {
-  const { apiToken, phoneNumberId, apiVersion } = env.whatsapp;
+  const { baseUrl, apiKey, instance } = env.evolutionApi;
 
-  if (!apiToken || !phoneNumberId) {
+  if (!baseUrl || !apiKey || !instance) {
     const error =
-      "WhatsApp no configurado (faltan WHATSAPP_API_TOKEN / WHATSAPP_PHONE_NUMBER_ID)";
+      "Evolution API no configurada (faltan EVOLUTION_API_URL / EVOLUTION_API_KEY / EVOLUTION_INSTANCE)";
     notificationLogger.warn(error);
     return { ok: false, error };
   }
@@ -145,30 +145,11 @@ export async function sendWhatsappMessage(
     });
   }
 
-  const url = `https://graph.facebook.com/${apiVersion}/${phoneNumberId}/messages`;
+  const url = `${baseUrl}/message/sendText/${instance}`;
 
   const body = JSON.stringify({
-    messaging_product: "whatsapp",
-    to: normalized,
-    type: "template",
-    template: {
-      name: ALERT_TEMPLATE_NAME,
-      language: { code: ALERT_TEMPLATE_LANG },
-      components: [
-        {
-          type: "body",
-          parameters: [
-            { type: "text", text: params.locationName },
-            { type: "text", text: String(params.newReviews) },
-            { type: "text", text: params.average.toFixed(1) },
-            { type: "text", text: String(params.lowRatingCount) },
-            { type: "text", text: String(params.whatsappCount) },
-            { type: "text", text: String(params.emailCount) },
-            { type: "text", text: params.panelUrl },
-          ],
-        },
-      ],
-    },
+    number: normalized,
+    text: buildAlertMessage(params),
   });
 
   const controller = new AbortController();
@@ -178,14 +159,14 @@ export async function sendWhatsappMessage(
     const res = await fetch(url, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${apiToken}`,
+        apikey: apiKey,
         "Content-Type": "application/json",
       },
       body,
       signal: controller.signal,
     });
 
-    // Meta puede devolver HTML en errores de infra (502/504): parseo defensivo.
+    // Evolution puede devolver HTML o texto plano en errores de infra: parseo defensivo.
     const text = await res.text();
     let data: unknown = null;
     try {
@@ -195,24 +176,23 @@ export async function sendWhatsappMessage(
     }
 
     if (!res.ok) {
-      const providerCode = extractProviderCode(data);
-      const isAuthError = res.status === 401 || providerCode === 190;
+      const isAuthError = res.status === 401 || res.status === 403;
+      const detail = extractErrorMessage(data);
 
       const error = isAuthError
-        ? `Autenticación con Meta falló (code ${providerCode ?? 190}). Revisá WHATSAPP_API_TOKEN.`
-        : `HTTP ${res.status}${providerCode ? ` (Meta code ${providerCode})` : ""}`;
+        ? "Autenticación con Evolution API falló. Revisá EVOLUTION_API_KEY."
+        : `HTTP ${res.status}${detail ? ` (${detail})` : ""}`;
 
-      notificationLogger.error("Fallo al enviar WhatsApp", {
+      notificationLogger.error("Fallo al enviar WhatsApp (Evolution API)", {
         status: res.status,
-        providerCode,
         data,
       });
 
-      return { ok: false, error, providerCode, response: data };
+      return { ok: false, error, providerCode: res.status, response: data };
     }
 
     const messageId = extractMessageId(data);
-    notificationLogger.info("WhatsApp enviado", {
+    notificationLogger.info("WhatsApp enviado (Evolution API)", {
       to: normalized,
       messageId,
     });
@@ -226,7 +206,7 @@ export async function sendWhatsappMessage(
         ? err.message
         : "Error desconocido";
 
-    notificationLogger.error("Excepción al enviar WhatsApp", { error: message });
+    notificationLogger.error("Excepción al enviar WhatsApp (Evolution API)", { error: message });
     return { ok: false, error: message };
   } finally {
     clearTimeout(timeout);

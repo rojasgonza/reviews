@@ -4,48 +4,77 @@ import { notificationLogger } from "../utils/logger";
 
 const router = Router();
 
-// 1. Verificación inicial (Meta llama a tu webhook con ?hub.mode=subscribe)
-router.get("/webhooks/whatsapp", (req: Request, res: Response) => {
-  const mode = req.query["hub.mode"];
-  const token = req.query["hub.verify_token"];
-  const challenge = req.query["hub.challenge"];
-
-  if (mode === "subscribe" && token === env.whatsapp.webhookVerifyToken) {
-    notificationLogger.info("Webhook verificado por Meta");
-    return res.status(200).send(challenge);
-  }
-  return res.sendStatus(403);
-});
-
-// 2. Eventos (Meta manda POST cada vez que pasa algo)
+/**
+ * Webhook de Evolution API.
+ *
+ * A diferencia de Meta, Evolution NO hace un handshake de verificación (no
+ * hay GET con hub.challenge): simplemente hace POST a la URL que configures
+ * en el Manager (Instance Settings → Webhook) cada vez que ocurre un evento.
+ *
+ * Para configurarlo en el Manager de Evolution:
+ *   Webhook URL: https://tu-backend.com/webhooks/whatsapp?token=EVOLUTION_WEBHOOK_TOKEN
+ *   Events: recomendado activar al menos MESSAGES_UPSERT y SEND_MESSAGE
+ *
+ * El "token" en la query string es un secreto propio (no lo define
+ * Evolution) para que no cualquiera pueda pegarle a este endpoint.
+ * Configurá EVOLUTION_WEBHOOK_TOKEN en tu .env con el mismo valor.
+ */
 router.post("/webhooks/whatsapp", (req: Request, res: Response) => {
-  const body = req.body;
-  const entry = body?.entry?.[0];
-  const changes = entry?.changes?.[0]?.value;
+  const expectedToken = env.evolutionApi.webhookToken;
+  if (expectedToken && req.query.token !== expectedToken) {
+    return res.sendStatus(403);
+  }
 
-  // Statuses de mensajes enviados
-  if (changes?.statuses) {
-    for (const status of changes.statuses) {
-      notificationLogger.info("WhatsApp status", {
-        messageId: status.id,
-        status: status.status,        // sent | delivered | read | failed
-        recipient: status.recipient_id,
-        errors: status.errors,        // si falló
+  const { event, instance, data } = req.body ?? {};
+
+  switch (event) {
+    // Mensajes entrantes o salientes (según fromMe)
+    case "messages.upsert": {
+      const key = data?.key ?? {};
+      const text =
+        data?.message?.conversation ?? data?.message?.extendedTextMessage?.text ?? undefined;
+
+      if (key.fromMe) {
+        notificationLogger.info("WhatsApp mensaje saliente (Evolution)", {
+          instance,
+          to: key.remoteJid,
+          messageId: key.id,
+        });
+      } else {
+        notificationLogger.info("WhatsApp mensaje entrante (Evolution)", {
+          instance,
+          from: key.remoteJid,
+          text,
+        });
+      }
+      break;
+    }
+
+    // Cambios de estado de un mensaje ya enviado (sent/delivered/read/failed)
+    case "messages.update": {
+      notificationLogger.info("WhatsApp status (Evolution)", {
+        instance,
+        messageId: data?.keyId ?? data?.key?.id,
+        status: data?.status,
       });
+      break;
+    }
+
+    // Cambios de conexión de la instancia (útil para detectar si se desvinculó el QR)
+    case "connection.update": {
+      notificationLogger.info("Estado de conexión de Evolution", {
+        instance,
+        state: data?.state,
+      });
+      break;
+    }
+
+    default: {
+      notificationLogger.info("Evento de Evolution sin manejar", { event, instance });
     }
   }
 
-  // Mensajes entrantes (respuestas de clientes)
-  if (changes?.messages) {
-    for (const msg of changes.messages) {
-      notificationLogger.info("WhatsApp mensaje entrante", {
-        from: msg.from,
-        text: msg.text?.body,
-      });
-    }
-  }
-
-  // Siempre responder 200 rápido, si no Meta reintenta
+  // Siempre responder 200 rápido, si no Evolution puede reintentar.
   res.sendStatus(200);
 });
 

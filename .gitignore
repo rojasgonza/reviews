@@ -2,10 +2,10 @@ node_modules/
 .env
 .env.*
 !.env.example
-
+*.zip
 logs/
 *.log
-
+*.rar
 dist/
 .next/
 coverage/
