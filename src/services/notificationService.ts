@@ -2,23 +2,8 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "../config/db";
 import { env } from "../config/env";
 import { notificationLogger } from "../utils/logger";
-import { sendWhatsappMessage } from "./whatsappService";
+import { sendWhatsappMessage, parseRecipientPhones } from "./whatsappService";
 
-/**
- * Lógica central de alertas (requisito punto 27 del spec).
- *
- * Idempotencia: en vez de contar "reseñas desde el último envío" en memoria,
- * usamos `lastAlertReviewCount`, que guarda el total acumulado de reseñas
- * del local en el momento del último envío exitoso. En cada evaluación:
- *
- *   pendientes = totalActual - lastAlertReviewCount
- *   si pendientes >= threshold -> se dispara la alerta
- *
- * La actualización de `lastAlertReviewCount` ocurre en la misma transacción
- * que la creación del `notification_log`, así que si el proceso se cae a
- * mitad de camino, al reiniciar el cálculo vuelve a partir del último
- * estado consistente en DB (no se duplica ni se pierde el conteo).
- */
 export async function checkAndSendAlerts(locationId: string) {
   const location = await prisma.location.findUnique({ where: { id: locationId } });
   if (!location) return;
@@ -26,7 +11,7 @@ export async function checkAndSendAlerts(locationId: string) {
   const settingsToCheck = await prisma.notificationSettings.findMany({
     where: {
       enabled: true,
-      OR: [{ locationId }, { locationId: null }], // config específica del local + config global
+      OR: [{ locationId }, { locationId: null }],
     },
   });
 
@@ -41,19 +26,18 @@ async function evaluateAndSend(
   locationName: string,
 ) {
   await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-    // Lock lógico: releemos dentro de la transacción para evitar carreras
-    // si dos reseñas llegan casi al mismo tiempo.
     const settings = await tx.notificationSettings.findUnique({
       where: { id: settingsId },
     });
-    if (!settings || !settings.enabled || !settings.recipientPhone) return;
+
+    const phones = parseRecipientPhones(settings?.recipientPhone);
+    if (!settings || !settings.enabled || phones.length === 0) return;
 
     const totalReviews = await tx.review.count({ where: { locationId } });
     const pending = totalReviews - settings.lastAlertReviewCount;
 
     if (pending < settings.threshold) return;
 
-    // Métricas para el template
     const statsWindow = await tx.review.aggregate({
       where: { locationId },
       _avg: { rating: true },
@@ -73,18 +57,12 @@ async function evaluateAndSend(
 
     const panelUrl = `${env.frontendUrl}/admin/reviews`;
 
-    // Reservamos el conteo ANTES de intentar enviar para que, incluso si el
-    // proceso se cae durante el envío, no se recalculen alertas duplicadas
-    // al reiniciar. Si el envío falla, queda registrado en notification_logs
-    // y se puede reintentar manualmente o vía el próximo ciclo (ver reintento abajo).
     await tx.notificationSettings.update({
       where: { id: settingsId },
       data: { lastAlertReviewCount: totalReviews, lastAlertAt: new Date() },
     });
 
-    // Enviamos el template aprobado (no texto libre) porque las alertas son
-    // business-initiated y caen fuera de la ventana de 24h de WhatsApp.
-    const result = await sendWhatsappMessage(settings.recipientPhone, {
+    const params = {
       locationName,
       newReviews: pending,
       average: statsWindow._avg.rating ?? 0,
@@ -92,77 +70,99 @@ async function evaluateAndSend(
       whatsappCount,
       emailCount,
       panelUrl,
-    });
+    };
+
+    const results: Array<{ phone: string; result: Awaited<ReturnType<typeof sendWhatsappMessage>> }> = [];
+    for (const phone of phones) {
+      const result = await sendWhatsappMessage(phone, params);
+      results.push({ phone, result });
+    }
+
+    const failed = results.filter((r) => !r.result.ok);
+    // "sent" si al menos uno funcionó, "failed" solo si fallaron TODOS
+    // (el enum de Prisma no tiene un estado intermedio; el detalle de qué
+    // falló queda igual en errorMessage/apiResponse).
+    const status: "sent" | "failed" = failed.length < results.length ? "sent" : "failed";
 
     await tx.notificationLog.create({
       data: {
         locationId,
         type: "whatsapp_alert",
         reviewCount: pending,
-        status: result.ok ? "sent" : "failed",
-        errorMessage: result.ok ? null : result.error,
-        apiResponse: (result.response as any) ?? undefined,
+        status,
+        errorMessage: failed.length
+          ? failed.map((f) => `${f.phone}: ${f.result.error}`).join(" | ")
+          : null,
+        apiResponse: results as any,
       },
     });
 
-    if (!result.ok) {
-      notificationLogger.error("Alerta de WhatsApp falló, reseña no se pierde", {
+    if (failed.length) {
+      notificationLogger.error("Alerta de WhatsApp con fallos parciales o totales", {
         locationId,
-        error: result.error,
-        providerCode: result.providerCode,
+        failed: failed.map((f) => f.phone),
+        totalEnviados: results.length,
       });
     }
   });
 }
 
 /**
- * Reintenta los envíos que fallaron recientemente. Pensado para ser
- * invocado por el cron job periódico (jobs/alertCron.ts).
- *
- * ⚠️ NOTA: los stats (average, lowRatingCount, whatsappCount, emailCount)
- * se mandan en 0 porque el log no los persiste. Si querés que los reintentos
- * reflejen los mismos números que el envío original, agregá esos campos al
- * modelo `NotificationLog` (average, lowRatingCount, whatsappCount, emailCount)
- * y guardalos en `evaluateAndSend`. Mientras tanto, el template se renderiza
- * con ceros en esas posiciones.
+ * Reintenta los envíos que fallaron recientemente (status "failed").
+ * Nota: como "failed" ahora significa "fallaron TODOS los números", el
+ * reintento vuelve a mandar a todos los números configurados actualmente
+ * (no solo a los que fallaron en su momento, ya que no se persiste ese detalle
+ * por número en una columna separada, solo en errorMessage/apiResponse como texto/JSON).
  */
 export async function retryFailedNotifications() {
-  const failed = await prisma.notificationLog.findMany({
+  const failedLogs = await prisma.notificationLog.findMany({
     where: { status: "failed" },
     orderBy: { createdAt: "desc" },
     take: 20,
   });
 
-  for (const log of failed) {
+  for (const log of failedLogs) {
     if (!log.locationId) continue;
 
     const settings = await prisma.notificationSettings.findFirst({
       where: { OR: [{ locationId: log.locationId }, { locationId: null }] },
     });
-    if (!settings?.recipientPhone || !settings.enabled) continue;
+
+    const phones = parseRecipientPhones(settings?.recipientPhone);
+    if (phones.length === 0 || !settings?.enabled) continue;
 
     const location = await prisma.location.findUnique({
       where: { id: log.locationId },
     });
     if (!location) continue;
 
-    const result = await sendWhatsappMessage(settings.recipientPhone, {
+    const params = {
       locationName: location.name,
       newReviews: log.reviewCount,
-      // TODO: persistir estos valores en NotificationLog para reintentos fieles
       average: 0,
       lowRatingCount: 0,
       whatsappCount: 0,
       emailCount: 0,
       panelUrl: `${env.frontendUrl}/admin/reviews`,
-    });
+    };
+
+    const results: Array<{ phone: string; result: Awaited<ReturnType<typeof sendWhatsappMessage>> }> = [];
+    for (const phone of phones) {
+      const result = await sendWhatsappMessage(phone, params);
+      results.push({ phone, result });
+    }
+
+    const failed = results.filter((r) => !r.result.ok);
+    const status: "sent" | "failed" = failed.length < results.length ? "sent" : "failed";
 
     await prisma.notificationLog.update({
       where: { id: log.id },
       data: {
-        status: result.ok ? "sent" : "failed",
-        errorMessage: result.ok ? null : result.error,
-        apiResponse: (result.response as any) ?? undefined,
+        status,
+        errorMessage: failed.length
+          ? failed.map((f) => `${f.phone}: ${f.result.error}`).join(" | ")
+          : null,
+        apiResponse: results as any,
       },
     });
   }

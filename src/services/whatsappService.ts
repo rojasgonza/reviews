@@ -67,6 +67,20 @@ export function normalizeWhatsappPhone(raw: string | null | undefined): string |
 
   return null;
 }
+/**
+ * Parsea un campo recipientPhone que puede contener uno o varios números
+ * separados por coma o punto y coma (el frontend guarda "num1,num2").
+ * Ignora vacíos y números inválidos.
+ */
+export function parseRecipientPhones(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  return raw
+    .split(/[,;]/)
+    .map((p) => p.trim())
+    .filter(Boolean)
+    .map((p) => normalizeWhatsappPhone(p))
+    .filter((p): p is string => p !== null);
+}
 
 /* ------------------------------- Helpers ---------------------------------- */
 
@@ -83,9 +97,6 @@ function buildAlertMessage(params: AlertTemplateParams): string {
     `*${params.locationName}* — nuevas reseñas\n\n` +
     `📝 Reseñas nuevas: ${params.newReviews}\n` +
     `⭐ Promedio: ${params.average.toFixed(1)}\n` +
-    `⚠️ Con calificación baja (≤2): ${params.lowRatingCount}\n` +
-    `📱 Con WhatsApp: ${params.whatsappCount}\n` +
-    `✉️ Con email: ${params.emailCount}\n\n` +
     `Ver panel: ${params.panelUrl}`
   );
 }
