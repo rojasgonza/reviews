@@ -3,11 +3,10 @@ import { env } from "../config/env";
 
 /**
  * Genera el QR (PNG en base64 data URL) que apunta a la URL pública y
- * permanente del local. La URL depende solo del slug, nunca cambia
- * salvo que el slug del local se edite explícitamente.
+ * permanente del local (Landing estilo Linktree).
  */
 export async function generateLocationQr(slug: string): Promise<string> {
-  const url = `${env.frontendUrl}/review/${slug}`;
+  const url = `${env.frontendUrl}/l/${slug}`;
   return QRCode.toDataURL(url, {
     errorCorrectionLevel: "M",
     margin: 2,
@@ -16,5 +15,5 @@ export async function generateLocationQr(slug: string): Promise<string> {
 }
 
 export function getReviewUrl(slug: string): string {
-  return `${env.frontendUrl}/review/${slug}`;
+  return `${env.frontendUrl}/l/${slug}`;
 }
