@@ -40,6 +40,8 @@ model Location {
   address   String?
   phone     String?
   logoUrl   String?  @map("logo_url")
+  googleReviewUrl String? @map("google_review_url")
+  links     Json?    @map("links")
   active    Boolean  @default(true)
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")

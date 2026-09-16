@@ -19,12 +19,20 @@ export const updateReviewStatusSchema = z.object({
   status: z.enum(["pending", "responded", "archived"]),
 });
 
+export const locationLinkSchema = z.object({
+  title: z.string().trim().min(1).max(80),
+  url: z.string().trim().url().max(1000),
+  icon: z.enum(["menu", "instagram", "whatsapp", "web", "other"]).optional(),
+});
+
 export const createLocationSchema = z.object({
   name: z.string().trim().min(1).max(120),
   slug: z.string().trim().min(1).max(120).regex(/^[a-z0-9-]+$/, "Slug inválido").optional(),
   address: z.string().trim().max(255).optional(),
   phone: z.string().trim().max(30).optional(),
   logoUrl: z.string().trim().url().max(500).optional(),
+  googleReviewUrl: z.string().trim().url().max(500).optional(),
+  links: z.array(locationLinkSchema).max(20).optional(),
 });
 
 export const updateLocationSchema = createLocationSchema.partial();

@@ -115,3 +115,7 @@ ALTER TABLE "notification_settings" ADD CONSTRAINT "notification_settings_locati
 
 -- AddForeignKey
 ALTER TABLE "notification_logs" ADD CONSTRAINT "notification_logs_location_id_fkey" FOREIGN KEY ("location_id") REFERENCES "locations"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AlterTable
+ALTER TABLE "locations" ADD COLUMN "google_review_url" TEXT;
+ALTER TABLE "locations" ADD COLUMN "links" JSONB;
