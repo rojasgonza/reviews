@@ -55,7 +55,7 @@ async function evaluateAndSend(
       where: { locationId, email: { not: null } },
     });
 
-    const panelUrl = `${env.frontendUrl[0]}/resenas/reviews`;
+    const panelUrl = `${env.frontendUrl[1]}/resenas/reviews`;
 
     await tx.notificationSettings.update({
       where: { id: settingsId },
