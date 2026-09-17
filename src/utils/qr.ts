@@ -15,5 +15,5 @@ export async function generateLocationQr(slug: string): Promise<string> {
 }
 
 export function getReviewUrl(slug: string): string {
-  return `${env.frontendUrl}/l/${slug}`;
+  return `${env.frontendUrl[0]}/l/${slug}`;
 }
