@@ -13,7 +13,7 @@ export const env = {
   nodeEnv: process.env.NODE_ENV ?? "development",
   port: parseInt(process.env.PORT ?? "4000", 10),
   appUrl: process.env.APP_URL,
-  frontendUrl: process.env.FRONTEND_URL?.split(','),
+frontendUrl: process.env.FRONTEND_URL?.split(",") || [],
 
   databaseUrl: required("DATABASE_URL"),
 

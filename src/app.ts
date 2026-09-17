@@ -16,10 +16,17 @@ export const app = express();
 
 app.use(
   cors({
-    origin: env.frontendUrl?.split(','),
+    origin: (origin, callback) => {
+      if (!origin || env.frontendUrl.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error(`Origen no permitido por CORS: ${origin}`));
+      }
+    },
     credentials: true,
   })
 );
+
 app.use(express.json({ limit: "1mb" }));
 app.use(cookieParser());
 app.use(webhooksRouter);
