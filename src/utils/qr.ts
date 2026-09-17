@@ -6,7 +6,7 @@ import { env } from "../config/env";
  * permanente del local (Landing estilo Linktree).
  */
 export async function generateLocationQr(slug: string): Promise<string> {
-  const url = `${env.frontendUrl}/l/${slug}`;
+  const url = `${env.frontendUrl[0]}/l/${slug}`;
   return QRCode.toDataURL(url, {
     errorCorrectionLevel: "M",
     margin: 2,
